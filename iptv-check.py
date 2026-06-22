@@ -356,7 +356,45 @@ def run_checks(entries: list[ChannelEntry], max_workers: int, timeout: int) -> l
 # RTSP 302 重定向解析
 # ---------------------------------------------------------------------------
 
-def resolve_rtsp_redirect(url: str, timeout: int = 8) -> str:
+def _connect_rtsp(host: str, port: int, proxy_url: str, timeout: int) -> socket.socket | None:
+    """Connect to RTSP server, optionally through HTTP CONNECT proxy."""
+    try:
+        if proxy_url:
+            up = urllib.parse.urlparse(proxy_url)
+            ph = up.hostname or ''
+            pp = up.port or 8080
+            infos = socket.getaddrinfo(ph, pp, type=socket.SOCK_STREAM)
+            if not infos:
+                return None
+            family, type_, proto, _cn, addr = infos[0]
+            sock = socket.socket(family, type_, proto)
+            sock.settimeout(timeout)
+            sock.connect(addr)
+            connect_req = f'CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n'.encode()
+            sock.sendall(connect_req)
+            resp = b''
+            while b'\r\n\r\n' not in resp:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                resp += chunk
+            if b'200' not in resp.split(b'\r\n', 1)[0]:
+                sock.close()
+                return None
+            return sock
+        else:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            if not infos:
+                return None
+            family, type_, proto, _cn, addr = infos[0]
+            sock = socket.socket(family, type_, proto)
+            sock.settimeout(timeout)
+            sock.connect(addr)
+            return sock
+    except OSError:
+        return None
+
+def resolve_rtsp_redirect(url: str, timeout: int = 8, proxy_url: str = '') -> str:
     """Follow RTSP 302 redirect chain and return the final URL."""
     if not url.startswith('rtsp://'):
         return url
@@ -376,22 +414,14 @@ def resolve_rtsp_redirect(url: str, timeout: int = 8) -> str:
         if not host:
             return current
 
-        path = parsed.path or '/'
-        if parsed.query:
-            path += '?' + parsed.query
-
         req = f'DESCRIBE {current} RTSP/1.0\r\nCSeq: {hop + 1}\r\nUser-Agent: iptv-check/1.0\r\nAccept: application/sdp\r\n\r\n'.encode()
 
-        try:
-            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-            if not infos:
-                return current
-            family, type_, proto, _cn, addr = infos[0]
-            sock = socket.socket(family, type_, proto)
-            sock.settimeout(timeout)
-            sock.connect(addr)
-            sock.sendall(req)
+        sock = _connect_rtsp(host, port, proxy_url, timeout)
+        if sock is None:
+            return current
 
+        try:
+            sock.sendall(req)
             data = b''
             while len(data) < 8192:
                 try:
@@ -405,6 +435,10 @@ def resolve_rtsp_redirect(url: str, timeout: int = 8) -> str:
                     break
             sock.close()
         except OSError:
+            try:
+                sock.close()
+            except OSError:
+                pass
             return current
 
         if not data:
@@ -418,9 +452,9 @@ def resolve_rtsp_redirect(url: str, timeout: int = 8) -> str:
             except ValueError:
                 return current
             if code == 302:
-                m = re.search(rb'Location:\s*(\S+)', data, re.IGNORECASE)
-                if m:
-                    loc = m.group(1).decode(errors='replace').strip()
+                rm = re.search(rb'Location:\s*(\S+)', data, re.IGNORECASE)
+                if rm:
+                    loc = rm.group(1).decode(errors='replace').strip()
                     if loc.startswith('rtsp://'):
                         current = loc
                         continue
@@ -1396,6 +1430,7 @@ def main(argv: list[str] | None = None) -> int:
         e.index = i
 
     # 解析 RTSP 重定向（仅 catchup-source 为 RTSP 的频道）
+    proxy_url = os.environ.get('PROXY_URL', '')  # 通过 HTTP CONNECT 隧道直达内网 RTSP
     resolve_entries = [e for e in new_entries if e.catchup_source and e.catchup_source.startswith('rtsp://')]
     if resolve_entries:
         print(f"\n解析 RTSP 重定向 ({len(resolve_entries)} 条)...")
@@ -1403,7 +1438,7 @@ def main(argv: list[str] | None = None) -> int:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.concurrent, 10)) as pool:
             def _resolve(e: ChannelEntry) -> bool:
                 original = e.catchup_source
-                resolved = resolve_rtsp_redirect(original)
+                resolved = resolve_rtsp_redirect(original, proxy_url=proxy_url)
                 if resolved != original:
                     e.catchup_source = resolved
                     return True
