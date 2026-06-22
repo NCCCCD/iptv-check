@@ -1024,13 +1024,26 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
     规则：保留用户 proxy IP，只替换多播地址。
     metadata_only=True 时跳过多播替换（规则1、2），仅更新元数据（规则3）。
     """
+    def _normalize_name(name: str) -> str:
+        n = name.strip()
+        n = re.sub(r'高清$', '', n)
+        n = re.sub(r'\bHD\b', '', n, flags=re.IGNORECASE)
+        n = re.sub(r'[-\s]+', '', n)
+        return n.strip()
+
     repo_by_tvg: dict[str, ChannelEntry] = {}
     repo_by_display: dict[str, ChannelEntry] = {}
+    repo_by_normalized: dict[str, ChannelEntry] = {}
     for e in repo_entries:
         if e.tvg_name:
             repo_by_tvg[e.tvg_name] = e
         if e.display_name:
             repo_by_display[e.display_name] = e
+        for name in (e.tvg_name, e.display_name):
+            if name:
+                norm = _normalize_name(name)
+                if norm and norm not in repo_by_normalized:
+                    repo_by_normalized[norm] = e
 
     # 构建 4K 升级映射: 仓库有 "山东卫视" + "山东卫视4K" → 可升级
     repo_4k_map: dict[str, str] = {}
@@ -1058,7 +1071,8 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
     changelog: list[str] = []
 
     def _repo_lookup(key: str) -> ChannelEntry | None:
-        return repo_by_tvg.get(key) or repo_by_display.get(key)
+        return (repo_by_tvg.get(key) or repo_by_display.get(key)
+                or repo_by_normalized.get(_normalize_name(key)))
 
     for ue in user_entries:
         tvg = ue.tvg_name
@@ -1147,16 +1161,39 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
         # 无变更
         new_entries.append(ue)
 
-    # 无替换提示（仓库无匹配的频道）
+    # 4K 频道从 HD 版本继承回放标签
+    for ne in new_entries:
+        name = ne.display_name or ne.tvg_name or ''
+        if name.endswith('4K') and not ne.catchup_source:
+            base = name[:-2]
+            hd_repo = repo_by_tvg.get(base) or repo_by_display.get(base)
+            if hd_repo and hd_repo.catchup_source:
+                ne.catchup = hd_repo.catchup or ne.catchup
+                ne.catchup_source = hd_repo.catchup_source
+                ne.catchup_days = hd_repo.catchup_days or ne.catchup_days
+                changelog.append(f'回放继承: "{name}" 使用 HD "{base}" 的回放标签')
+
+    # 无替换提示（仓库无匹配的频道）并移除无回放的孤儿频道
     def _in_repo(name: str) -> bool:
-        return name in repo_by_tvg or name in repo_by_display
+        return (name in repo_by_tvg or name in repo_by_display
+                or _normalize_name(name) in repo_by_normalized)
     no_match = [ue for ue in user_entries
-                if ue.tvg_name
-                and not _in_repo(ue.tvg_name)
-                and not _in_repo(ue.display_name)
-                and not (ue.tvg_name.endswith('4K') and ue.tvg_name[:-2] in repo_by_tvg)]
+                if not _in_repo(ue.tvg_name or '')
+                and not _in_repo(ue.display_name or '')
+                and not (ue.tvg_name and ue.tvg_name.endswith('4K') and ue.tvg_name[:-2] in repo_by_tvg)]
+    orphan_keys = set()
+    for ue in no_match:
+        key = ue.tvg_name or ue.display_name or ''
+        orphan_keys.add(key)
+    before = len(new_entries)
+    new_entries = [ne for ne in new_entries
+                   if (ne.tvg_name or ne.display_name or '') not in orphan_keys
+                   or ne.catchup_source]
+    removed = before - len(new_entries)
     for ue in no_match:
         changelog.append(f'无替换: "{ue.display_name}" (tvg: {ue.tvg_name}) 仓库无此频道')
+    if removed:
+        changelog.append(f'移除: {removed} 个无回放且仓库无匹配的频道')
 
     return new_entries, changelog
 
