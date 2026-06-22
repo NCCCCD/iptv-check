@@ -1430,7 +1430,7 @@ def main(argv: list[str] | None = None) -> int:
         e.index = i
 
     # 解析 RTSP 重定向（仅 catchup-source 为 RTSP 的频道）
-    proxy_url = os.environ.get('PROXY_URL', '')  # 通过 HTTP CONNECT 隧道直达内网 RTSP
+    proxy_url = os.environ.get('PROXY_URL', '')
     resolve_entries = [e for e in new_entries if e.catchup_source and e.catchup_source.startswith('rtsp://')]
     if resolve_entries:
         print(f"\n解析 RTSP 重定向 ({len(resolve_entries)} 条)...")
@@ -1438,7 +1438,9 @@ def main(argv: list[str] | None = None) -> int:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.concurrent, 10)) as pool:
             def _resolve(e: ChannelEntry) -> bool:
                 original = e.catchup_source
-                resolved = resolve_rtsp_redirect(original, proxy_url=proxy_url)
+                resolved = resolve_rtsp_redirect(original)
+                if resolved == original and proxy_url:
+                    resolved = resolve_rtsp_redirect(original, proxy_url=proxy_url)
                 if resolved != original:
                     e.catchup_source = resolved
                     return True
@@ -1450,7 +1452,7 @@ def main(argv: list[str] | None = None) -> int:
         if resolved_count:
             print(f"  ✅ {resolved_count} 条已解析为直达 URL")
         else:
-            print(f"  ⚠️ 无法解析（RTSP 可能不可达），保留原始 URL")
+            print(f"  ⚠️ 无法解析，保留原始 URL")
 
     new_m3u = generate_m3u(new_entries)
 
