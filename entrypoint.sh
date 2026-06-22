@@ -52,9 +52,9 @@ LOGFILE="/var/log/iptv-check.log"
 touch "$LOGFILE"
 echo "[entrypoint] 定时模式，调度: $CRON_SCHEDULE"
 
-# 启动时立即执行一次（重启 / 更新后自动跑一轮）
+# 启动时立即执行一次（重启 / 更新后自动跑一轮），不阻塞定时任务
 echo "[entrypoint] 启动立即执行..."
-cd /app && python3 iptv-check.py >> "$LOGFILE" 2>&1
+cd /app && python3 iptv-check.py >> "$LOGFILE" 2>&1 || true
 
 # cron 输出写入文件，tail 实时推送到 stdout（Docker 日志）
 echo "$CRON_SCHEDULE cd /app && python3 iptv-check.py >> $LOGFILE 2>&1" | crontab -
