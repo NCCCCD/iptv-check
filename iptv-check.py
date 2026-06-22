@@ -149,7 +149,11 @@ def generate_m3u(entries: list[ChannelEntry], header: str = "#EXTM3U\n") -> str:
         if e.catchup:
             attrs += f' catchup="{e.catchup}"'
         if e.catchup_source:
-            attrs += f' catchup-source="{e.catchup_source}"'
+            src = e.catchup_source
+            if 'r2h-seek-mode' not in src:
+                sep = '&' if '?' in src else '?'
+                src += f'{sep}r2h-seek-mode=range(UTC%2B8)'
+            attrs += f' catchup-source="{src}"'
         if e.catchup_days:
             attrs += f' catchup-days="{e.catchup_days}"'
         lines.append(f'#EXTINF:-1 {attrs.strip()},{e.display_name}')
