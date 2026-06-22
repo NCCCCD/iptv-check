@@ -1105,47 +1105,55 @@ def get_previous_version_url(url: str) -> str | None:
 def push_to_github_api(token: str, repo: str, path: str, content: str,
                         message: str, branch: str = "main") -> bool:
     import http.client
-    from urllib.parse import quote
+    import json
 
-    encoded_path = quote(path, safe='/')
-    conn = http.client.HTTPSConnection("api.github.com", timeout=10)
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "iptv-check/1.0",
-        "Content-Type": "application/json",
-    }
+    encoded_path = urllib.parse.quote(path, safe='/')
 
+    def _req(method: str, url_path: str,
+             req_body: bytes | None = None) -> tuple[int, bytes]:
+        """Raw HTTP request via low-level putheader (bytes bypass latin-1)."""
+        conn = http.client.HTTPSConnection("api.github.com", timeout=10)
+        conn.putrequest(method, url_path)
+        conn.putheader(b"Host", b"api.github.com")
+        conn.putheader(b"Authorization", f"Bearer {token}".encode("utf-8"))
+        conn.putheader(b"Accept", b"application/vnd.github.v3+json")
+        conn.putheader(b"User-Agent", b"iptv-check/1.0")
+        if req_body is not None:
+            conn.putheader(b"Content-Type", b"application/json")
+            conn.putheader(b"Content-Length", str(len(req_body)).encode("latin-1"))
+        conn.endheaders()
+        if req_body is not None:
+            conn.send(req_body)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+
+    # GET 获取 SHA
+    get_path = f"/repos/{repo}/contents/{encoded_path}"
+    status, body = _req("GET", get_path)
     sha = ""
-    conn.request("GET", f"/repos/{repo}/contents/{encoded_path}", headers=headers)
-    resp = conn.getresponse()
-    if resp.status == 200:
-        data = json.loads(resp.read())
+    if status == 200:
+        data = json.loads(body)
         sha = data.get("sha", "")
-    elif resp.status != 404:
-        print(f"GitHub API 错误: {resp.status}", file=sys.stderr)
-        resp.read()
+    elif status != 404:
+        print(f"GitHub API 错误: {status}", file=sys.stderr)
         return False
-    else:
-        resp.read()
 
-    payload = json.dumps({
+    # PUT 推送新文件
+    payload_bytes = json.dumps({
         "message": message,
         "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
         "sha": sha,
         "branch": branch,
-    })
+    }).encode("utf-8")
 
-    conn.request("PUT", f"/repos/{repo}/contents/{encoded_path}",
-                 payload.encode("utf-8"), headers)
-    resp = conn.getresponse()
-    body = resp.read()
-    if resp.status in (200, 201):
+    put_path = f"/repos/{repo}/contents/{encoded_path}"
+    status, body = _req("PUT", put_path, payload_bytes)
+    if status in (200, 201):
         result = json.loads(body)
         print(f"✅ 已推送到 GitHub: {result['content']['html_url']}")
         return True
     else:
-        print(f"❌ 推送失败 ({resp.status}): {body.decode()}", file=sys.stderr)
+        print(f"❌ 推送失败 ({status}): {body.decode(errors='replace')}", file=sys.stderr)
         return False
 
 # ---------------------------------------------------------------------------
