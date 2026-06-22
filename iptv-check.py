@@ -1457,6 +1457,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"  ⚠️ 无法解析，保留原始 URL")
 
+    # 全局刷新所有流 URL 中的代理前缀为当前 PROXY_URL
+    user_proxy = os.environ['PROXY_URL']
+    proxy_re = re.compile(r'(https?://[\d.]+:\d+)/udp/')
+    for e in new_entries:
+        e.url = proxy_re.sub(user_proxy + r'/udp/', e.url)
+
     new_m3u = generate_m3u(new_entries)
 
     # 输出变更日志
