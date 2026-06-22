@@ -1,0 +1,11 @@
+config/
+.env
+.env.example
+.gitignore
+__pycache__/
+.DS_Store
+test
+AGENTS.md
+修改意见.md
+docs/
+README.md

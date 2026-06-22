@@ -1,0 +1,32 @@
+name: Build & Push Docker Image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        run: |
+          git init
+          git remote add origin https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout FETCH_HEAD
+
+      - name: Login to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker build -t ghcr.io/$REPO:latest .
+          docker push ghcr.io/$REPO:latest

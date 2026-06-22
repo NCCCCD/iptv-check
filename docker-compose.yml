@@ -1,0 +1,16 @@
+services:
+  iptv-check:
+    image: ghcr.io/nccccd/iptv-check:latest
+    container_name: iptv-check
+    restart: unless-stopped
+    environment:
+      # ── 定时调度 ──
+      CRON_SCHEDULE: "0 3 * * *"
+      # ── GitHub Token ──
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      # ── udpxy 代理地址（内网） ──
+      PROXY_URL: "${PROXY_URL}"
+    volumes:
+      - ./config:/root/.config/iptv-check
+    # command: ["run"]
+    # command: ["shell"]
