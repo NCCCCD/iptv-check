@@ -137,14 +137,6 @@ def parse_m3u_full(text: str) -> list[ChannelEntry]:
 
 def generate_m3u(entries: list[ChannelEntry], header: str = "#EXTM3U\n") -> str:
     lines = [header.rstrip()]
-    def _catchup_transform(src: str) -> str:
-        if not src:
-            return src
-        s = src
-        if 'r2h-seek-mode' not in s:
-            sep = '&' if '?' in s else '?'
-            s += f'{sep}r2h-seek-mode=range(UTC%2B8)'
-        return s
 
     for e in entries:
         attrs = f'tvg-id="{e.tvg_id}"' if e.tvg_id else ""
@@ -157,7 +149,7 @@ def generate_m3u(entries: list[ChannelEntry], header: str = "#EXTM3U\n") -> str:
         if e.catchup:
             attrs += f' catchup="{e.catchup}"'
         if e.catchup_source:
-            attrs += f' catchup-source="{_catchup_transform(e.catchup_source)}"'
+            attrs += f' catchup-source="{e.catchup_source}"'
         if e.catchup_days:
             attrs += f' catchup-days="{e.catchup_days}"'
         lines.append(f'#EXTINF:-1 {attrs.strip()},{e.display_name}')
@@ -359,6 +351,82 @@ def run_checks(entries: list[ChannelEntry], max_workers: int, timeout: int) -> l
             results.append(fut.result())
     results.sort(key=lambda r: r.stream.index)
     return results
+
+# ---------------------------------------------------------------------------
+# RTSP 302 重定向解析
+# ---------------------------------------------------------------------------
+
+def resolve_rtsp_redirect(url: str, timeout: int = 8) -> str:
+    """Follow RTSP 302 redirect chain and return the final URL."""
+    if not url.startswith('rtsp://'):
+        return url
+
+    max_hops = 5
+    current = url
+    seen: set[str] = set()
+
+    for hop in range(max_hops):
+        if current in seen:
+            break
+        seen.add(current)
+
+        parsed = urllib.parse.urlparse(current)
+        host = parsed.hostname or ''
+        port = parsed.port or 554
+        if not host:
+            return current
+
+        path = parsed.path or '/'
+        if parsed.query:
+            path += '?' + parsed.query
+
+        req = f'DESCRIBE {current} RTSP/1.0\r\nCSeq: {hop + 1}\r\nUser-Agent: iptv-check/1.0\r\nAccept: application/sdp\r\n\r\n'.encode()
+
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            if not infos:
+                return current
+            family, type_, proto, _cn, addr = infos[0]
+            sock = socket.socket(family, type_, proto)
+            sock.settimeout(timeout)
+            sock.connect(addr)
+            sock.sendall(req)
+
+            data = b''
+            while len(data) < 8192:
+                try:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                    if b'\r\n\r\n' in data:
+                        break
+                except socket.timeout:
+                    break
+            sock.close()
+        except OSError:
+            return current
+
+        if not data:
+            return current
+
+        status = data.split(b'\r\n', 1)[0].decode(errors='replace')
+        code_str = status.split(' ', 2)
+        if len(code_str) >= 2:
+            try:
+                code = int(code_str[1])
+            except ValueError:
+                return current
+            if code == 302:
+                m = re.search(rb'Location:\s*(\S+)', data, re.IGNORECASE)
+                if m:
+                    loc = m.group(1).decode(errors='replace').strip()
+                    if loc.startswith('rtsp://'):
+                        current = loc
+                        continue
+        return current
+
+    return current
 
 # ---------------------------------------------------------------------------
 # TS 流深度分析（PAT/PMT/SDT/SPS）
@@ -1326,6 +1394,29 @@ def main(argv: list[str] | None = None) -> int:
     new_entries, changelog = merge_playlist(user_entries, repo_entries, metadata_only=args.metadata_only)
     for i, e in enumerate(new_entries):
         e.index = i
+
+    # 解析 RTSP 重定向（仅 catchup-source 为 RTSP 的频道）
+    resolve_entries = [e for e in new_entries if e.catchup_source and e.catchup_source.startswith('rtsp://')]
+    if resolve_entries:
+        print(f"\n解析 RTSP 重定向 ({len(resolve_entries)} 条)...")
+        resolved_count = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.concurrent, 10)) as pool:
+            def _resolve(e: ChannelEntry) -> bool:
+                original = e.catchup_source
+                resolved = resolve_rtsp_redirect(original)
+                if resolved != original:
+                    e.catchup_source = resolved
+                    return True
+                return False
+            fut_to_e = {pool.submit(_resolve, e): e for e in resolve_entries}
+            for fut in concurrent.futures.as_completed(fut_to_e):
+                if fut.result():
+                    resolved_count += 1
+        if resolved_count:
+            print(f"  ✅ {resolved_count} 条已解析为直达 URL")
+        else:
+            print(f"  ⚠️ 无法解析（RTSP 可能不可达），保留原始 URL")
+
     new_m3u = generate_m3u(new_entries)
 
     # 输出变更日志
