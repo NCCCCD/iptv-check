@@ -1104,40 +1104,48 @@ def get_previous_version_url(url: str) -> str | None:
 
 def push_to_github_api(token: str, repo: str, path: str, content: str,
                         message: str, branch: str = "main") -> bool:
-    api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    import http.client
+    from urllib.parse import quote
+
+    encoded_path = quote(path, safe='/')
+    conn = http.client.HTTPSConnection("api.github.com", timeout=10)
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "iptv-check/1.0",
+        "Content-Type": "application/json",
     }
 
     sha = ""
-    req = urllib.request.Request(api_url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-            sha = data.get("sha", "")
-    except urllib.error.HTTPError as e:
-        if e.code != 404:
-            print(f"GitHub API 错误: {e}", file=sys.stderr)
-            return False
+    conn.request("GET", f"/repos/{repo}/contents/{encoded_path}", headers=headers)
+    resp = conn.getresponse()
+    if resp.status == 200:
+        data = json.loads(resp.read())
+        sha = data.get("sha", "")
+    elif resp.status != 404:
+        print(f"GitHub API 错误: {resp.status}", file=sys.stderr)
+        resp.read()
+        return False
+    else:
+        resp.read()
 
     payload = json.dumps({
         "message": message,
         "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
         "sha": sha,
         "branch": branch,
-    }).encode("utf-8")
+    })
 
-    req = urllib.request.Request(api_url, data=payload, headers=headers, method="PUT")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
-            print(f"✅ 已推送到 GitHub: {result['content']['html_url']}")
-            return True
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        print(f"❌ 推送失败 ({e.code}): {body}", file=sys.stderr)
+    conn.request("PUT", f"/repos/{repo}/contents/{encoded_path}",
+                 payload.encode("utf-8"), headers)
+    resp = conn.getresponse()
+    body = resp.read()
+    if resp.status in (200, 201):
+        result = json.loads(body)
+        print(f"✅ 已推送到 GitHub: {result['content']['html_url']}")
+        return True
+    else:
+        print(f"❌ 推送失败 ({resp.status}): {body.decode()}", file=sys.stderr)
         return False
 
 # ---------------------------------------------------------------------------
