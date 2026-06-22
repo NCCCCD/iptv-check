@@ -137,24 +137,30 @@ def parse_m3u_full(text: str) -> list[ChannelEntry]:
 
 def generate_m3u(entries: list[ChannelEntry], header: str = "#EXTM3U\n") -> str:
     lines = [header.rstrip()]
+    def _catchup_transform(src: str) -> str:
+        if not src:
+            return src
+        s = src
+        if 'r2h-seek-mode' not in s:
+            sep = '&' if '?' in s else '?'
+            s += f'{sep}r2h-seek-mode=range(UTC%2B8)'
+        return s
+
     for e in entries:
-        if e.extinf:
-            lines.append(e.extinf)
-        else:
-            attrs = f'tvg-id="{e.tvg_id}"' if e.tvg_id else ""
-            if e.tvg_name:
-                attrs += f' tvg-name="{e.tvg_name}"'
-            if e.logo:
-                attrs += f' tvg-logo="{e.logo}"'
-            if e.group:
-                attrs += f' group-title="{e.group}"'
-            if e.catchup:
-                attrs += f' catchup="{e.catchup}"'
-            if e.catchup_source:
-                attrs += f' catchup-source="{e.catchup_source}"'
-            if e.catchup_days:
-                attrs += f' catchup-days="{e.catchup_days}"'
-            lines.append(f'#EXTINF:-1 {attrs.strip()},{e.display_name}')
+        attrs = f'tvg-id="{e.tvg_id}"' if e.tvg_id else ""
+        if e.tvg_name:
+            attrs += f' tvg-name="{e.tvg_name}"'
+        if e.logo:
+            attrs += f' tvg-logo="{e.logo}"'
+        if e.group:
+            attrs += f' group-title="{e.group}"'
+        if e.catchup:
+            attrs += f' catchup="{e.catchup}"'
+        if e.catchup_source:
+            attrs += f' catchup-source="{_catchup_transform(e.catchup_source)}"'
+        if e.catchup_days:
+            attrs += f' catchup-days="{e.catchup_days}"'
+        lines.append(f'#EXTINF:-1 {attrs.strip()},{e.display_name}')
         lines.append(e.url)
     return '\n'.join(lines) + '\n'
 
