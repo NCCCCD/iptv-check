@@ -67,6 +67,9 @@ class ChannelEntry:
     logo: str = ""
     group: str = ""
     tvg_id: str = ""
+    catchup: str = ""
+    catchup_source: str = ""
+    catchup_days: str = ""
     extinf: str = ""
     index: int = 0
 
@@ -86,12 +89,18 @@ def parse_extinf_attrs(line: str) -> dict:
     group = re.search(r'group-title="([^"]*)"', attrs_str)
     tvg_name = re.search(r'tvg-name="([^"]*)"', attrs_str)
     tvg_id = re.search(r'tvg-id="([^"]*)"', attrs_str)
+    catchup = re.search(r'catchup="([^"]*)"', attrs_str)
+    catchup_source = re.search(r'catchup-source="([^"]*)"', attrs_str)
+    catchup_days = re.search(r'catchup-days="([^"]*)"', attrs_str)
     return {
         "display": display.strip(" ,"),
         "logo": logo.group(1) if logo else "",
         "group": group.group(1) if group else "",
         "tvg_name": tvg_name.group(1) if tvg_name else "",
         "tvg_id": tvg_id.group(1) if tvg_id else "",
+        "catchup": catchup.group(1) if catchup else "",
+        "catchup_source": catchup_source.group(1) if catchup_source else "",
+        "catchup_days": catchup_days.group(1) if catchup_days else "",
     }
 
 def parse_m3u_full(text: str) -> list[ChannelEntry]:
@@ -116,6 +125,9 @@ def parse_m3u_full(text: str) -> list[ChannelEntry]:
                 logo=info.get("logo", ""),
                 group=info.get("group", ""),
                 tvg_id=info.get("tvg_id", ""),
+                catchup=info.get("catchup", ""),
+                catchup_source=info.get("catchup_source", ""),
+                catchup_days=info.get("catchup_days", ""),
                 extinf=info.get("extinf", ""),
                 index=idx,
             ))
@@ -136,6 +148,12 @@ def generate_m3u(entries: list[ChannelEntry], header: str = "#EXTM3U\n") -> str:
                 attrs += f' tvg-logo="{e.logo}"'
             if e.group:
                 attrs += f' group-title="{e.group}"'
+            if e.catchup:
+                attrs += f' catchup="{e.catchup}"'
+            if e.catchup_source:
+                attrs += f' catchup-source="{e.catchup_source}"'
+            if e.catchup_days:
+                attrs += f' catchup-days="{e.catchup_days}"'
             lines.append(f'#EXTINF:-1 {attrs.strip()},{e.display_name}')
         lines.append(e.url)
     return '\n'.join(lines) + '\n'
@@ -948,6 +966,9 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
                 logo=repo_e.logo or ue.logo,
                 group=repo_e.group or ue.group,
                 tvg_id=repo_e.tvg_id or ue.tvg_id,
+                catchup=repo_e.catchup or ue.catchup,
+                catchup_source=repo_e.catchup_source or ue.catchup_source,
+                catchup_days=repo_e.catchup_days or ue.catchup_days,
                 extinf='',
                 index=ue.index,
             ))
@@ -968,6 +989,9 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
                     logo=repo_e.logo or ue.logo,
                     group=repo_e.group or ue.group,
                     tvg_id=repo_e.tvg_id or ue.tvg_id,
+                    catchup=repo_e.catchup or ue.catchup,
+                    catchup_source=repo_e.catchup_source or ue.catchup_source,
+                    catchup_days=repo_e.catchup_days or ue.catchup_days,
                     extinf='',
                     index=ue.index,
                 ))
@@ -980,7 +1004,13 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
             new_logo = repo_e.logo or ue.logo
             new_group = repo_e.group or ue.group
             new_tvg_id = repo_e.tvg_id or ue.tvg_id
-            if new_tvg_name != tvg or new_logo != ue.logo or new_group != ue.group or new_tvg_id != ue.tvg_id:
+            new_catchup = repo_e.catchup or ue.catchup
+            new_catchup_source = repo_e.catchup_source or ue.catchup_source
+            new_catchup_days = repo_e.catchup_days or ue.catchup_days
+            if (new_tvg_name != tvg or new_logo != ue.logo or new_group != ue.group
+                or new_tvg_id != ue.tvg_id
+                or new_catchup != ue.catchup or new_catchup_source != ue.catchup_source
+                or new_catchup_days != ue.catchup_days):
                 new_entries.append(ChannelEntry(
                     tvg_name=new_tvg_name,
                     display_name=_pick_display_name(ue.display_name, repo_e.display_name),
@@ -988,6 +1018,9 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
                     logo=new_logo,
                     group=new_group,
                     tvg_id=new_tvg_id,
+                    catchup=repo_e.catchup or ue.catchup,
+                    catchup_source=repo_e.catchup_source or ue.catchup_source,
+                    catchup_days=repo_e.catchup_days or ue.catchup_days,
                     extinf='',
                     index=ue.index,
                 ))
@@ -995,6 +1028,8 @@ def merge_playlist(user_entries: list[ChannelEntry], repo_entries: list[ChannelE
                 if new_logo != ue.logo: meta_changes.append('logo')
                 if new_group != ue.group: meta_changes.append('分组')
                 if new_tvg_id != ue.tvg_id: meta_changes.append('tvg-id')
+                if new_catchup != ue.catchup or new_catchup_source != ue.catchup_source or new_catchup_days != ue.catchup_days:
+                    meta_changes.append('回放')
                 changelog.append(f'元数据: "{ue.display_name}" 更新 {", ".join(meta_changes)}')
                 continue
 
