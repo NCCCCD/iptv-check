@@ -347,11 +347,17 @@ def check_stream(stream: Stream, timeout: int) -> CheckResult:
 
 def run_checks(entries: list[ChannelEntry], max_workers: int, timeout: int) -> list[CheckResult]:
     streams = [Stream(index=e.index, name=e.display_name, url=e.url, logo=e.logo, group=e.group) for e in entries]
+    total = len(streams)
+    done = 0
     results: list[CheckResult] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         fut_to_s = {pool.submit(check_stream, s, timeout): s for s in streams}
         for fut in concurrent.futures.as_completed(fut_to_s):
             results.append(fut.result())
+            done += 1
+            if done % 10 == 0 or done == total:
+                print(f"检测中: {done}/{total}", end='\r')
+    print(f"检测完成: {done}/{total}" + ' ' * 10)
     results.sort(key=lambda r: r.stream.index)
     return results
 
