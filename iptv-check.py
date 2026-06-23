@@ -1308,6 +1308,23 @@ def push_to_github_api(token: str, repo: str, path: str, content: str,
 # CLI
 # ---------------------------------------------------------------------------
 
+def diagnose_proxy(proxy_url: str) -> bool:
+    """启动诊断：检查 rtp2httpd 是否正常、网络路由是否通。"""
+    if not proxy_url:
+        return True
+    try:
+        playlist_url = proxy_url.rstrip('/') + '/playlist.m3u'
+        req = urllib.request.Request(playlist_url)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            body = r.read(200).decode(errors='replace')
+        if not body.startswith('#EXTM3U'):
+            print(f"  ⚠️ 代理 {playlist_url} 返回非 M3U 内容", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"  ⚠️ 代理 {proxy_url} 不可达 ({e})", file=sys.stderr)
+        return False
+    return True
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="IPTV M3U 播放列表检测 + 更新替换",
@@ -1324,6 +1341,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument('--detect-only', action='store_true', help='仅检测，不执行更新合并')
     p.add_argument('--metadata-only', action='store_true', help='仅更新元数据（logo、tvg-id、分组），保留原始多播地址')
     p.add_argument('--analyze', action='store_true', help='TS 流深度分析：检测分辨率、编码、服务名')
+    p.add_argument('--diagnose', action='store_true', help='全链路诊断：检查代理 / 路由 / RTSP / GitHub M3U')
     return p.parse_args(argv)
 
 def main(argv: list[str] | None = None) -> int:
@@ -1344,6 +1362,72 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
     saved_m3u = cfg.get('m3u_url', '')
     saved_repo = cfg.get('repo_url', '')
+
+    # 启动诊断：检查代理是否可达（OpenWrt 丢路由的早期预警）
+    proxy_url = os.environ.get('PROXY_URL', '')
+    if proxy_url and not args.set_token and not args.diagnose:
+        diagnose_proxy(proxy_url)
+
+    # --diagnose 全链路诊断模式
+    if args.diagnose:
+        _proxy = proxy_url or ''
+        print("=" * 50)
+        print("  IPTV 全链路诊断")
+        print("=" * 50)
+
+        # 1. 代理连通性
+        ok = diagnose_proxy(_proxy)
+        print(f"  {'✅' if ok else '❌'} rtp2httpd {_proxy}/playlist.m3u")
+
+        # 2. 抓一个频道的 catchup 端点（CCTV1）
+        if ok:
+            try:
+                playlist_url = _proxy.rstrip('/') + '/playlist.m3u'
+                with urllib.request.urlopen(playlist_url, timeout=5) as r:
+                    m3u = r.read().decode(errors='replace')
+                for line in m3u.split('\n'):
+                    if 'catchup-source' in line and '/CCTV/CCTV1/catchup' in line:
+                        m = re.search(r'catchup-source="([^"]+)"', line)
+                        if m:
+                            base = m.group(1).split('?')[0]
+                            test_url = base + '?playseek=20000101000000-20000101010000'
+                            try:
+                                with urllib.request.urlopen(test_url, timeout=5) as cr:
+                                    code = cr.status
+                                if code == 200:
+                                    print(f"  ✅ catchup 端点正常 (HTTP {code})")
+                                else:
+                                    print(f"  ⚠️ catchup 端点响应 {code}")
+                            except urllib.error.HTTPError as he:
+                                if he.code == 503:
+                                    print(f"  ❌ rtp2httpd 返回 503 → OpenWrt 路由可能丢失")
+                                    print(f"     修复: ssh root@10.10.2.6 \"route add -net 182.139.0.0 netmask 255.255.0.0 gw 10.187.224.1\"")
+                                else:
+                                    print(f"  ⚠️ catchup 端点 HTTP {he.code}")
+                            except Exception as e2:
+                                print(f"  ❌ catchup 端点不可达 ({e2})")
+                        break
+            except Exception as e:
+                print(f"  ⚠️ 解析 M3U 失败 ({e})")
+
+        # 3. GitHub M3U 可读
+        if saved_m3u:
+            try:
+                with urllib.request.urlopen(saved_m3u, timeout=5) as r:
+                    body = r.read(500)
+                print(f"  ✅ GitHub M3U 可读 ({len(body)} 字节, 前 {min(len(body), 80)}: {body[:80].decode(errors='replace').strip()})")
+            except Exception as e:
+                print(f"  ❌ GitHub M3U 不可读 ({e})")
+
+        # 4. 配置完整性
+        print(f"  {'✅' if saved_m3u else '❌'} M3U URL: {saved_m3u or '未配置'}")
+        print(f"  {'✅' if saved_repo else '⚠️'} 仓库 URL: {saved_repo or '未配置'}")
+        token = os.environ.get('GITHUB_TOKEN', '') or cfg.get('github_token', '')
+        print(f"  {'✅' if token else '⚠️'} GitHub Token: {'已配置' if token else '未配置'}")
+        print(f"  {'✅' if _proxy else '❌'} PROXY_URL: {_proxy or '未设置'}")
+
+        print("=" * 50)
+        return 0
 
     # 首次运行：无 CLI 参数、无保存 URL、无 --update → 交互式配置
     if args.url is None and not saved_m3u and not args.update:
