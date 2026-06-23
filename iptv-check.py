@@ -1469,6 +1469,28 @@ def main(argv: list[str] | None = None) -> int:
     for i, e in enumerate(new_entries):
         e.index = i
 
+    # RTSP 路由可达性预检
+    rtsp_hosts: set[str] = set()
+    for e in new_entries:
+        if e.catchup_source and e.catchup_source.startswith('rtsp://'):
+            m = re.match(r'rtsp://([\d.]+)(?::\d+)?/', e.catchup_source)
+            if m:
+                rtsp_hosts.add(m.group(1))
+    unreachable = []
+    for host in sorted(rtsp_hosts):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            s.connect((host, 554))
+            s.close()
+        except (OSError, socket.timeout):
+            unreachable.append(host)
+    if unreachable:
+        print(f"\n⚠️ RTSP 路由不可达: {', '.join(unreachable)}")
+        print("   iStoreOS 可能丢了 `182.139.0.0/16` 路由，执行:")
+        print("   route add -net 182.139.0.0 netmask 255.255.0.0 gw 10.187.224.1")
+        print("   修复后添加 `/etc/rc.local` 持久化")
+
     # 解析 RTSP 重定向（仅 catchup-source 为 RTSP 的频道）
     proxy_url = os.environ.get('PROXY_URL', '')
     resolve_entries = [e for e in new_entries if e.catchup_source and e.catchup_source.startswith('rtsp://')]
