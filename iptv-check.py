@@ -356,8 +356,8 @@ def run_checks(entries: list[ChannelEntry], max_workers: int, timeout: int) -> l
             results.append(fut.result())
             done += 1
             if done % 10 == 0 or done == total:
-                print(f"检测中: {done}/{total}", end='\r')
-    print(f"检测完成: {done}/{total}" + ' ' * 10)
+                print(f"检测中: {done}/{total}", end='\r', flush=True)
+    print(f"检测完成: {done}/{total}" + ' ' * 10, flush=True)
     results.sort(key=lambda r: r.stream.index)
     return results
 
